@@ -1,3 +1,6 @@
 [submodule "repos/openvla"]
 	path = repos/openvla
 	url = https://github.com/openvla/openvla.git
+[submodule "repos/bridge_data_v2"]
+	path = repos/bridge_data_v2
+	url = https://github.com/rail-berkeley/bridge_data_v2

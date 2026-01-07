@@ -1,4 +1,5 @@
-bridge_dataset*
+data/bridge_*
+data/bridge_dataset*
 
 # Created by https://www.toptal.com/developers/gitignore/api/python,vim
 # Edit at https://www.toptal.com/developers/gitignore?templates=python,vim

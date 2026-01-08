@@ -26,3 +26,42 @@ wget -P ./data https://rail.eecs.berkeley.edu/datasets/bridge_release/data/tfds/
 # Download meta data
 wget -r -np -nd -A "*.json" -P ./data https://rail.eecs.berkeley.edu/datasets/bridge_release/data/tfds/bridge_dataset/1.0.0/
 ```
+
+## Try #1
+
+nvcr.io/nvidia/pytorch:23.10-py3 컨테이너로 환경 생성
+pip install --upgrade pip
+pip install torch torchvision torchaudio
+pip install transformers accelerate bitsandbytes timm tokenizers
+
+openvla repo clone
+cd openvla
+pip install -e .
+pip install packaging ninja
+pip install "flash-attn==2.5.5" --no-build-isolation
+
+Finetune OpenVLA via LoRA
+Download https://rail.eecs.berkeley.edu/datasets/bridge_release/data/tfds/bridge_dataset/
+
+지금 `scripted` 데이터를 TFRecord로 이미 만드셨잖아요? **우선은 그 TFRecord를 그대로 `finetune.py`에 넣어보세요.** * **만약 에러가 안 나고 학습이 시작된다면:** 아까 사용한 변환 스크립트가 이미 RLDS와 유사한 구조로 만들어준 것이니 그대로 진행하시면 됩니다.
+
+convert script dataset to TFRecord
+python bridge_data_v2/data_processing/bridgedata_raw_to_numpy.py --input_path ./data/scripted_raw/ --output_path ./data/scripted_numpy_output --depth 2
+
+CUDA_VISIBLE_DEVICES="" python bridge_data_v2/data_processing/bridgedata_numpy_to_tfrecord.py --input_path ./data/scripted_numpy_output/ --output_path ./data/scripted_tf_output --depth 2
+
+torchrun --standalone --nnodes 1 --nproc-per-node 1 openvla/vla-scripts/finetune.py  --vla_path "openvla/openvla-7b"  --data_root_dir "./data/scripted_tf_output" --dataset_name "bridge_scripted_tf" --run_root_dir "./experiments/bridge_finetune" --adapter_tmp_dir "./tmp/adapters" --lora_rank 32 --batch_size 2 --grad_accumulation_steps 1 --learning_rate 5e-4 --image_aug True --save_steps 100
+
+실패하면 아래를 해야된다
+convert script dataset to RLDS
+git clone https://github.com/kvablack/dlimp.git
+
+아니면 그냥 주어진 brige_org 데이터 셋을 사용해야할거같다.. > it works..
+wget -r -nH --cut-dirs=4 --reject="index.html*" https://rail.eecs.berkeley.edu/datasets/bridge_release/data/tfds/bridge_dataset/1.0.0
+
+torchrun --standalone --nnodes 1 --nproc-per-node 1 openvla/vla-scripts/finetune.py  --vla_path "openvla/openvla-7b"  --data_root_dir "./data" --dataset_name bridge_orig --run_root_dir "./experiments/bridge_finetune" --adapter_tmp_dir "./tmp/adapters" --lora_rank 32 --batch_size 2 --grad_accumulation_steps 1 --learning_rate 5e-4 --image_aug True --save_steps 100
+
+
+
+[Docker 생성]
+docker run -it --rm --name sdi_gpu-0 -v /home/sdi/openvla/:/workspace --gpus "device=0" nvcr.io/nvidia/pytorch:23.10-py3

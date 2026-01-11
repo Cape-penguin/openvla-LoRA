@@ -4,6 +4,8 @@ Fine-tuning OpenVLA using LoRA for parameter-efficient robotic policy learning.
 ## Installation
 
 ```
+docker run --gpus all -it --name openvla -w /workspace -v "C:\Users\idong\src":/workspace nvcr.io/nvidia/pytorch:23.10-py3
+
 # Create and activate conda environment
 conda create -n openvla python=3.10 -y
 conda activate openvla
@@ -12,6 +14,8 @@ conda install pytorch torchvision torchaudio pytorch-cuda=12.4 -c pytorch -c nvi
 
 cd repos/openvla
 pip install -e .
+
+pip install "flash-attn==2.5.5" --no-build-isolation
 ```
 
 ## Download Dataset ([BridgeData V2](https://rail-berkeley.github.io/bridgedata/))

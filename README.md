@@ -33,16 +33,20 @@ wget -r -np -nd -A "*.json" -P ./data https://rail.eecs.berkeley.edu/datasets/br
 
 ## Try #1
 
-nvcr.io/nvidia/pytorch:23.10-py3 컨테이너로 환경 생성
-pip install --upgrade pip
-pip install torch torchvision torchaudio
-pip install transformers accelerate bitsandbytes timm tokenizers
+nvcr.io/nvidia/pytorch:24.01-py3 컨테이너로 환경 생성
+docker run --gpus all -it --name openvla -w /workspace -v ~/src/psu:/workspace nvcr.io/nvidia/dia/pytorch:24.01-py3
 
-openvla repo clone
-cd openvla
-pip install -e .
-pip install packaging ninja
+pip install torch==2.2.0 torchaudio==2.2.0 --index-url https://download.pytorch.org/whl/cu121
+
+pip install transformers==4.40.1 tokenizers==0.19.1 timm==0.9.10
+
+pip install jupyter ipykernel
+
 pip install "flash-attn==2.5.5" --no-build-isolation
+
+\# clone openvla repo
+cd ./repos/openvla
+pip install -e .
 
 Finetune OpenVLA via LoRA
 Download https://rail.eecs.berkeley.edu/datasets/bridge_release/data/tfds/bridge_dataset/

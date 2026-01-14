@@ -34,6 +34,7 @@ wget -r -np -nd -A "*.json" -P ./data https://rail.eecs.berkeley.edu/datasets/br
 ## Try #1
 
 nvcr.io/nvidia/pytorch:24.01-py3 컨테이너로 환경 생성
+
 docker run --gpus all -it --name openvla -w /workspace -v ~/src/psu:/workspace nvcr.io/nvidia/dia/pytorch:24.01-py3
 
 pip install torch==2.2.0 torchaudio==2.2.0 --index-url https://download.pytorch.org/whl/cu121
@@ -41,6 +42,12 @@ pip install torch==2.2.0 torchaudio==2.2.0 --index-url https://download.pytorch.
 pip install transformers==4.40.1 tokenizers==0.19.1 timm==0.9.10
 
 pip install jupyter ipykernel
+
+Set Environment
+
+export CUDA_HOME=/usr/local/cuda-12.3
+export PATH=$CUDA_HOME/bin:$PATH
+export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
 
 pip install "flash-attn==2.5.5" --no-build-isolation
 

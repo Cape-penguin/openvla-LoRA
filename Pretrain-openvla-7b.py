@@ -1,0 +1,283 @@
+import os
+import pickle
+import pandas as pd
+import numpy as np
+from PIL import Image
+
+import torch
+from torch.utils.data import Dataset, DataLoader
+from transformers import AutoModelForVision2Seq, AutoProcessor
+from peft import LoraConfig, get_peft_model
+
+device = "cuda:0"
+print(f"device={device}")
+
+# 1. 모델 로드
+vla = AutoModelForVision2Seq.from_pretrained(
+    "openvla/openvla-7b",
+    attn_implementation="flash_attention_2",
+    torch_dtype=torch.bfloat16,
+    trust_remote_code=True,
+    low_cpu_mem_usage=True,
+    device_map=device
+)
+
+config = LoraConfig(
+    r=32,                         # Rank
+    lora_alpha=64,
+    target_modules=["q_proj", "v_proj", "k_proj", "o_proj"], # Attention 레이어 타겟
+    lora_dropout=0.05,
+    bias="none",
+    task_type="CAUSAL_LM",
+)
+
+# 3. LoRA 모델로 변환
+vla = get_peft_model(vla, config)
+print(f"trainable parameters: {vla.print_trainable_parameters()}")
+# trainable params: 33,554,432 || all params: 7,574,791,616 || trainable%: 0.4430
+
+df = pd.read_csv('./instruction.csv', )
+
+with open(os.path.join(df["path"].to_list()[0], "policy_out.pkl"), "rb") as f:
+    raw_data = pickle.load(f)
+
+actions = [d['actions'] for d in raw_data]
+action = actions[0]
+
+im_pth = os.path.join(df["path"].to_list()[0], f"images0/im_{0}.jpg")
+image = Image.open(im_pth).convert("RGB")
+
+prompt = "In order to pick up the object, the robot should"
+
+vla.eval()
+
+processor = AutoProcessor.from_pretrained("openvla/openvla-7b", trust_remote_code=True)
+
+inputs = processor(prompt, image, return_tensors="pt", ).to(device, dtype=torch.bfloat16)
+input_ids = inputs["input_ids"].squeeze(0)
+labels = torch.full_like(input_ids, -100)
+
+raw_action = np.array(action, dtype=np.float32)
+bin_indices = np.clip((raw_action + 1.0) / 2.0 * 255, 0, 255).astype(np.int32)
+action_token_ids = torch.tensor(bin_indices + 31000, dtype=torch.long)
+labels[-7:] = action_token_ids
+
+print(f"labels:{labels}")
+
+device = torch.device("cuda")
+vla.eval()
+
+inputs = {k: v.to(device, dtype=torch.bfloat16 if v.dtype == torch.float32 else v.dtype) for k, v in inputs.items()}
+
+# Design for 1 sample (not batch level)
+with torch.no_grad():
+    action = vla.predict_action(**inputs, unnorm_key="bridge_orig")
+
+print(action)
+
+
+# Load Dataset
+
+class Traj:
+    def __init__(self, traj_dir, instruction):
+        self.path = traj_dir
+        self.instruction = instruction
+        self.img_dir = os.path.join(traj_dir, "images0")
+        self.img_len = len(os.listdir(os.path.join(traj_dir, "images0")))
+        with open(os.path.join(traj_dir, "policy_out.pkl"), "rb") as f:
+            raw_data = pickle.load(f)
+        self.actions = [d['actions'] for d in raw_data]
+
+        assert len(self.actions) == (self.img_len - 1)
+    
+    def __len__(self):
+        return len(self.actions)
+    
+    def getitem(self, idx):
+        return os.path.join(self.img_dir, f"im_{idx}.jpg"), self.instruction
+    
+    def getitems(self):
+        ims = []
+        inst = []
+        for idx in range(self.img_len - 1):
+            i, s = self.getitem(idx)
+            ims.append(i)
+            inst.append(s)
+        return ims, self.actions, inst
+
+class BridgeDatasetV2(Dataset):
+    def __init__(self, traj_dirs, instructions, processor, ):
+        self.processor = processor
+        self.instructions = instructions
+        # self.vla_config = vla_config
+        self.traj_dirs = traj_dirs
+        self.trajs = self.load_trajs()
+
+        self.ims = []
+        self.actions = []
+        self.INST = []
+
+        for traj in self.trajs:
+            I, A, inst = traj.getitems()
+            self.ims.extend(I)
+            self.actions.extend(A)
+            self.INST.extend(inst)
+        print(f"initialize BridgeDatasetV2, number of trajectories: {len(self.trajs)}, total sample size: {len(self.actions)}.")
+
+    def load_trajs(self, ):
+        trajs = []
+        for traj_dir, inst in zip(self.traj_dirs, self.instructions):
+            obj = Traj(traj_dir, inst)
+            trajs.append(obj)
+        return trajs
+
+    def __len__(self):
+        return len(self.actions)
+    
+    def __getitem__(self, idx):
+        image = Image.open(self.ims[idx]).convert("RGB")
+        # 1. padding="max_length"를 제거하고 실제 길이만큼만 가져옵니다.
+        inputs = self.processor(self.INST[idx], image, return_tensors="pt")
+
+        raw_action = np.array(self.actions[idx], dtype=np.float32)
+        bin_indices = np.clip((raw_action + 1.0) / 2.0 * 255, 0, 255).astype(np.int32)
+        action_token_ids = torch.tensor(bin_indices + 31000, dtype=torch.long)
+        
+        prompt_ids = inputs["input_ids"].squeeze(0)
+        input_ids = torch.cat([prompt_ids, action_token_ids], dim=0)
+        # 2. 레이블을 input_ids와 동일한 길이로 만듭니다.
+        labels = torch.full_like(input_ids, -100)
+        
+        # 3. 맨 뒤 7개에 액션 주입 (이때 input_ids 끝에 액션이 바로 붙음)
+        labels[-7:] = action_token_ids
+
+        return {
+            "input_ids": input_ids,
+            "pixel_values": inputs["pixel_values"].squeeze(0),
+            "labels": labels
+        }
+    
+def collate_fn(batch):
+    from torch.nn.utils.rnn import pad_sequence
+    
+    input_ids = [item["input_ids"] for item in batch]
+    pixel_values = torch.stack([item["pixel_values"] for item in batch])
+    labels = [item["labels"] for item in batch]
+    
+    # input_ids 패딩 (tokenizer의 pad_token_id 사용, 보통 0 또는 1)
+    padded_input_ids = pad_sequence(input_ids, batch_first=True, padding_value=processor.tokenizer.pad_token_id)
+    
+    # labels 패딩 (학습 무시 값인 -100으로 패딩)
+    padded_labels = pad_sequence(labels, batch_first=True, padding_value=-100)
+    
+    attention_mask = padded_input_ids.ne(processor.tokenizer.pad_token_id).long()
+
+    return {
+        "input_ids": padded_input_ids,
+        "pixel_values": pixel_values,
+        "labels": padded_labels,
+        "attention_mask": attention_mask
+    }
+
+df = pd.read_csv('./instruction.csv', )
+
+train_dataset = BridgeDatasetV2(
+    traj_dirs=df['path'].to_list(),
+    instructions=df['instruction'].to_list(),
+    processor=processor,
+)
+
+train_dataloader = DataLoader(
+    train_dataset, 
+    batch_size=2, 
+    shuffle=True, 
+    collate_fn=collate_fn
+)
+
+
+print(f"DataLoader Length: {len(train_dataset)}")
+batch = next(iter(train_dataloader))
+print(f"Input IDs shape: {batch['input_ids'].shape}")     # [BS, Seq_Len]
+print(f"Pixel Values shape: {batch['pixel_values'].shape}") # [BS, 3, 224, 224]
+print(f"Labels shape: {batch['labels'].shape}")           # [BS, 7] (7 action tokens)
+
+print(f'infer batch level')
+
+batch = {k: v.to(device, dtype=torch.bfloat16 if v.dtype == torch.float32 else v.dtype) for k, v in batch.items()}
+
+input_ids = batch['input_ids']
+pixel_values = batch['pixel_values']
+labels = batch['labels']
+
+outputs = vla(
+    input_ids=batch["input_ids"],
+    pixel_values=batch["pixel_values"].to(torch.bfloat16),
+    labels=batch["labels"]
+)
+
+print('outputs:', outputs.logits.shape)
+
+loss = outputs.loss
+loss.backward()
+print(f"Current Loss: {loss.item()}")
+
+predicted_ids = torch.argmax(outputs.logits, dim=-1)
+print("Predicted Action Tokens:", predicted_ids[0, :])
+print("Actual Target Tokens:   ", batch["labels"][0, :])
+
+
+from transformers import AdamW, get_scheduler
+from tqdm.auto import tqdm
+
+num_epochs = 20
+# batch_size = 16  # 실제 VRAM 상황에 따라 조절 (부족하면 4 또는 8)
+gradient_accumulation_steps = 4  # 실제 배치는 16 * 4 = 64의 효과
+learning_rate = 2e-4  # LoRA 권장 학습률
+
+optimizer = AdamW(vla.parameters(), lr=learning_rate)
+
+num_training_steps = num_epochs * len(train_dataloader) // gradient_accumulation_steps
+lr_scheduler = get_scheduler(
+    name="cosine",
+    optimizer=optimizer,
+    num_warmup_steps=int(0.03 * num_training_steps), # 초기 3% 구간은 Warmup
+    num_training_steps=num_training_steps,
+)
+
+print("Starting Training...")
+vla.train()
+
+for epoch in range(num_epochs):
+    epoch_loss = 0
+    progress_bar = tqdm(train_dataloader, desc=f"Epoch {epoch+1}")
+    for step, batch in enumerate(progress_bar):
+        # 데이터를 장치로 이동 및 타입 변환
+        batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
+
+        # Forward Pass
+        outputs = vla(
+            input_ids=batch["input_ids"],
+            pixel_values=batch["pixel_values"].to(torch.bfloat16),
+            labels=batch["labels"],
+            attention_mask=batch.get("attention_mask")
+        )
+        loss = outputs.loss / gradient_accumulation_steps
+        loss.backward()
+
+        # Gradient Accumulation: 일정 스텝마다 업데이트
+        if (step + 1) % gradient_accumulation_steps == 0 or (step + 1) == len(train_dataloader):
+            optimizer.step()
+            lr_scheduler.step()
+            optimizer.zero_grad()
+            
+        epoch_loss += loss.item() * gradient_accumulation_steps
+        progress_bar.set_postfix({"loss": loss.item() * gradient_accumulation_steps})
+
+        if step % 50000 == 0:
+            print(f"[{step}/{len(train_dataloader)}] save checkpoints")
+            vla.save_pretrained(f"./checkpoints/openvla-lora-epoch-{epoch+1:02}-{step:06}")
+
+    avg_loss = epoch_loss / len(train_dataloader)
+    print(f"Epoch {epoch+1} Average Loss: {avg_loss:.4f}")
+
+print("Training Complete!")

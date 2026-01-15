@@ -13,6 +13,7 @@ from peft import PeftModel
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--checkpoint", type=str, required=False, default='checkpoints/openvla-lora-epoch-01-000000/')
+parser.add_argument("--output", type=str, default="")
 args = parser.parse_args()
 
 device = "cuda:0"
@@ -54,16 +55,18 @@ class Traj:
         return len(self.actions)
     
     def getitem(self, idx):
-        return os.path.join(self.img_dir, f"im_{idx}.jpg"), self.instruction
+        return os.path.join(self.img_dir, f"im_{idx}.jpg"), self.instruction, self.path
     
     def getitems(self):
         ims = []
         inst = []
+        path = []
         for idx in range(self.img_len - 1):
-            i, s = self.getitem(idx)
+            i, s, p = self.getitem(idx)
             ims.append(i)
             inst.append(s)
-        return ims, self.actions, inst
+            path.append(p)
+        return ims, self.actions, inst, path
 
 class BridgeDatasetV2(Dataset):
     def __init__(self, traj_dirs, instructions, processor, ):
@@ -76,12 +79,14 @@ class BridgeDatasetV2(Dataset):
         self.ims = []
         self.actions = []
         self.INST = []
+        self.paths = []
 
         for traj in self.trajs:
-            I, A, inst = traj.getitems()
+            I, A, inst, p = traj.getitems()
             self.ims.extend(I)
             self.actions.extend(A)
             self.INST.extend(inst)
+            self.paths.extend(p)
         print(f"initialize BridgeDatasetV2, number of trajectories: {len(self.trajs)}, total sample size: {len(self.actions)}.")
 
     def load_trajs(self, ):
@@ -114,7 +119,9 @@ class BridgeDatasetV2(Dataset):
         return {
             "input_ids": input_ids,
             "pixel_values": inputs["pixel_values"].squeeze(0),
-            "labels": labels
+            "labels": labels,
+            "path": self.paths[idx],
+            "im_path": self.ims[idx]
         }
     
 def collate_fn(batch):
@@ -136,7 +143,9 @@ def collate_fn(batch):
         "input_ids": padded_input_ids,
         "pixel_values": pixel_values,
         "labels": padded_labels,
-        "attention_mask": attention_mask
+        "attention_mask": attention_mask,
+        "path": [item["path"] for item in batch],
+        "im_path": [item["im_path"] for item in batch]
     }
 
 df = pd.read_csv('./instruction.csv', )
@@ -150,7 +159,7 @@ train_dataset = BridgeDatasetV2(
 eval_dataloader = DataLoader(
     train_dataset, 
     batch_size=1, 
-    shuffle=True, 
+    shuffle=False, 
     collate_fn=collate_fn
 )
 
@@ -190,18 +199,19 @@ with torch.no_grad():
         
         results.append({
             "sample_idx": i,
+            "im_path": train_dataset.ims[i],
             "instruction": train_dataset.INST[i],
             "gt_action": np.array(gt_action).tolist(),
             "pred_action": pred_action.tolist() # 리스트 형태로 저장
         })
         
-        if i >= 100: # 너무 많으면 여기서 끊기
-            break
+        # if i >= 100: # 너무 많으면 여기서 끊기
+        #     break
 
 # 4. 결과 저장 (JSON 또는 CSV)
 output_df = pd.DataFrame(results)
-output_df.to_json("inference_results.json", orient="records", indent=4)
-print("Inference results saved to 'inference_results.json'.")
+output_df.to_json(f"inference_results-{args.output}.json", orient="records", indent=4)
+print(f"Inference results saved to 'inference_results-{args.output}.json'.")
 
 # 5. 간단한 오차 출력 (MSE)
 mse = np.mean([np.mean((np.array(r['gt_action']) - np.array(r['pred_action']))**2) for r in results])

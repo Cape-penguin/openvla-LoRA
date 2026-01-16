@@ -8,10 +8,27 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--json", type=str, required=False, default='inference_results.json')
 args = parser.parse_args()
 
-with open(args.json, 'r', encoding='utf-8') as f:
-    data = json.load(f)
+# with open(args.json, 'r', encoding='utf-8') as f:
+#     data = json.load(f)
 
-print(f"Total sample length: {len(data)}")
+# print(f"Total sample length: {len(data)}")
+
+data = []
+with open(args.json, 'r', encoding='utf-8') as f:
+    first_char = f.read(1)
+    f.seek(0)  # 읽기 위치를 다시 처음으로 되돌림
+
+    if first_char == '[':
+        # 1. 일반적인 JSON 리스트 형식인 경우
+        data = json.load(f)
+        print(f"Loaded as Standard JSON. Total samples: {len(data)}")
+    else:
+        # 2. JSONL (줄바꿈 구분) 형식인 경우
+        for line in f:
+            line = line.strip()
+            if line:  # 빈 줄이 아닌 경우에만 파싱
+                data.append(json.loads(line))
+        print(f"Loaded as JSONL. Total samples: {len(data)}")
 
 def evaluate_tokens(gt_actions, pred_actions):
 

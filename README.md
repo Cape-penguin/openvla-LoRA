@@ -43,6 +43,10 @@ pip install transformers==4.40.1 tokenizers==0.19.1 timm==0.9.10
 
 pip install jupyter ipykernel
 
+\# clone openvla repo
+cd ./repos/openvla
+pip install -e .
+
 Set Environment
 
 export CUDA_HOME=/usr/local/cuda-12.3
@@ -50,10 +54,6 @@ export PATH=$CUDA_HOME/bin:$PATH
 export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
 
 pip install "flash-attn==2.5.5" --no-build-isolation
-
-\# clone openvla repo
-cd ./repos/openvla
-pip install -e .
 
 Finetune OpenVLA via LoRA
 Download https://rail.eecs.berkeley.edu/datasets/bridge_release/data/tfds/bridge_dataset/

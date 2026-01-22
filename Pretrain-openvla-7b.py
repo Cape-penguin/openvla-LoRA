@@ -134,7 +134,6 @@ class BridgeDatasetV2(Dataset):
     
     def __getitem__(self, idx):
         image = Image.open(self.ims[idx]).convert("RGB")
-        # 1. padding="max_length"를 제거하고 실제 길이만큼만 가져옵니다.
         inputs = self.processor(self.INST[idx], image, return_tensors="pt")
 
         raw_action = np.array(self.actions[idx], dtype=np.float32)
@@ -143,10 +142,9 @@ class BridgeDatasetV2(Dataset):
         
         prompt_ids = inputs["input_ids"].squeeze(0)
         input_ids = torch.cat([prompt_ids, action_token_ids], dim=0)
-        # 2. 레이블을 input_ids와 동일한 길이로 만듭니다.
+        
         labels = torch.full_like(input_ids, -100)
         
-        # 3. 맨 뒤 7개에 액션 주입 (이때 input_ids 끝에 액션이 바로 붙음)
         labels[-7:] = action_token_ids
 
         return {
@@ -162,10 +160,8 @@ def collate_fn(batch):
     pixel_values = torch.stack([item["pixel_values"] for item in batch])
     labels = [item["labels"] for item in batch]
     
-    # input_ids 패딩 (tokenizer의 pad_token_id 사용, 보통 0 또는 1)
     padded_input_ids = pad_sequence(input_ids, batch_first=True, padding_value=processor.tokenizer.pad_token_id)
     
-    # labels 패딩 (학습 무시 값인 -100으로 패딩)
     padded_labels = pad_sequence(labels, batch_first=True, padding_value=-100)
     
     attention_mask = padded_input_ids.ne(processor.tokenizer.pad_token_id).long()

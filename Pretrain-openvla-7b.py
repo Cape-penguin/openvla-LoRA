@@ -12,7 +12,7 @@ from peft import LoraConfig, get_peft_model
 device = "cuda:0"
 print(f"device={device}")
 
-# 1. 모델 로드
+# 1. Load model
 vla = AutoModelForVision2Seq.from_pretrained(
     "openvla/openvla-7b",
     attn_implementation="flash_attention_2",
@@ -23,18 +23,17 @@ vla = AutoModelForVision2Seq.from_pretrained(
 )
 
 config = LoraConfig(
-    r=32,                         # Rank
+    r=32,                                                    # Rank
     lora_alpha=64,
-    target_modules=["q_proj", "v_proj", "k_proj", "o_proj"], # Attention 레이어 타겟
+    target_modules=["q_proj", "v_proj", "k_proj", "o_proj"], # Attention Layer Target
     lora_dropout=0.05,
     bias="none",
     task_type="CAUSAL_LM",
 )
 
-# 3. LoRA 모델로 변환
+# 3. Transform to LoRA
 vla = get_peft_model(vla, config)
 print(f"trainable parameters: {vla.print_trainable_parameters()}")
-# trainable params: 33,554,432 || all params: 7,574,791,616 || trainable%: 0.4430
 
 df = pd.read_csv('./instruction.csv', )
 
@@ -77,7 +76,6 @@ print(action)
 
 
 # Load Dataset
-
 class Traj:
     def __init__(self, traj_dir, instruction):
         self.path = traj_dir
@@ -179,7 +177,8 @@ def collate_fn(batch):
         "attention_mask": attention_mask
     }
 
-df = pd.read_csv('./instruction.csv', )
+df = pd.read_csv('./instruction.csv', )[:100]
+print(f"Dataframe shape: {df.shape}")
 
 train_dataset = BridgeDatasetV2(
     traj_dirs=df['path'].to_list(),
@@ -197,9 +196,9 @@ train_dataloader = DataLoader(
 
 print(f"DataLoader Length: {len(train_dataset)}")
 batch = next(iter(train_dataloader))
-print(f"Input IDs shape: {batch['input_ids'].shape}")     # [BS, Seq_Len]
+print(f"Input IDs shape: {batch['input_ids'].shape}")       # [BS, Seq_Len]
 print(f"Pixel Values shape: {batch['pixel_values'].shape}") # [BS, 3, 224, 224]
-print(f"Labels shape: {batch['labels'].shape}")           # [BS, 7] (7 action tokens)
+print(f"Labels shape: {batch['labels'].shape}")             # [BS, 7] (7 action tokens)
 
 print(f'infer batch level')
 
@@ -222,17 +221,17 @@ loss.backward()
 print(f"Current Loss: {loss.item()}")
 
 predicted_ids = torch.argmax(outputs.logits, dim=-1)
-print("Predicted Action Tokens:", predicted_ids[0, :])
-print("Actual Target Tokens:   ", batch["labels"][0, :])
+print("Predicted Action Tokens:", predicted_ids[0, -7:])
+print("Actual Target Tokens:   ", batch["labels"][0, -7:])
 
 
 from transformers import AdamW, get_scheduler
 from tqdm.auto import tqdm
 
-num_epochs = 20
-# batch_size = 16  # 실제 VRAM 상황에 따라 조절 (부족하면 4 또는 8)
-gradient_accumulation_steps = 4  # 실제 배치는 16 * 4 = 64의 효과
-learning_rate = 2e-4  # LoRA 권장 학습률
+num_epochs = 1000
+# batch_size = 16  # Adjust batch size, batch 2 is fine wiht 40G VRAM
+gradient_accumulation_steps = 4  # 16 * 4 = 64 batch size effect
+learning_rate = 5e-5  # Recommend LoRA lr
 
 optimizer = AdamW(vla.parameters(), lr=learning_rate)
 
@@ -240,7 +239,7 @@ num_training_steps = num_epochs * len(train_dataloader) // gradient_accumulation
 lr_scheduler = get_scheduler(
     name="cosine",
     optimizer=optimizer,
-    num_warmup_steps=int(0.03 * num_training_steps), # 초기 3% 구간은 Warmup
+    num_warmup_steps=int(0.03 * num_training_steps),
     num_training_steps=num_training_steps,
 )
 
@@ -250,11 +249,12 @@ vla.train()
 for epoch in range(num_epochs):
     epoch_loss = 0
     progress_bar = tqdm(train_dataloader, desc=f"Epoch {epoch+1}")
+    
+    
+
     for step, batch in enumerate(progress_bar):
-        # 데이터를 장치로 이동 및 타입 변환
         batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
 
-        # Forward Pass
         outputs = vla(
             input_ids=batch["input_ids"],
             pixel_values=batch["pixel_values"].to(torch.bfloat16),
@@ -264,7 +264,7 @@ for epoch in range(num_epochs):
         loss = outputs.loss / gradient_accumulation_steps
         loss.backward()
 
-        # Gradient Accumulation: 일정 스텝마다 업데이트
+        # Gradient Accumulation
         if (step + 1) % gradient_accumulation_steps == 0 or (step + 1) == len(train_dataloader):
             optimizer.step()
             lr_scheduler.step()
@@ -273,9 +273,9 @@ for epoch in range(num_epochs):
         epoch_loss += loss.item() * gradient_accumulation_steps
         progress_bar.set_postfix({"loss": loss.item() * gradient_accumulation_steps})
 
-        if step % 50000 == 0:
-            print(f"[{step}/{len(train_dataloader)}] save checkpoints")
-            vla.save_pretrained(f"./checkpoints/openvla-lora-epoch-{epoch+1:02}-{step:06}")
+        if epoch % 20 == 0 and step == 0:
+            print(f"[{epoch}/{num_epochs}] save checkpoints")
+            vla.save_pretrained(f"./checkpoints/openvla-lora-epoch-{epoch+1:04}-{step:06}-sample-100-rows")
 
     avg_loss = epoch_loss / len(train_dataloader)
     print(f"Epoch {epoch+1} Average Loss: {avg_loss:.4f}")

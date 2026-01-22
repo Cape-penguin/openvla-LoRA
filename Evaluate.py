@@ -16,17 +16,17 @@ args = parser.parse_args()
 data = []
 with open(args.json, 'r', encoding='utf-8') as f:
     first_char = f.read(1)
-    f.seek(0)  # 읽기 위치를 다시 처음으로 되돌림
+    f.seek(0)  
 
     if first_char == '[':
-        # 1. 일반적인 JSON 리스트 형식인 경우
+        
         data = json.load(f)
         print(f"Loaded as Standard JSON. Total samples: {len(data)}")
     else:
-        # 2. JSONL (줄바꿈 구분) 형식인 경우
+        
         for line in f:
             line = line.strip()
-            if line:  # 빈 줄이 아닌 경우에만 파싱
+            if line:  
                 data.append(json.loads(line))
         print(f"Loaded as JSONL. Total samples: {len(data)}")
 
@@ -64,7 +64,7 @@ for entry in data:
     total_metrics["token_accuracy"].append(metrics["token_accuracy"])
     total_metrics["near_accuracy_5"].append(metrics["near_accuracy_5"])
 
-# 2. 전체 평균 계산
+
 final_results = {
     "avg_token_error": np.mean(total_metrics["mean_token_error"]),
     "avg_token_accuracy": np.mean(total_metrics["token_accuracy"]),

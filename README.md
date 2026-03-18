@@ -49,3 +49,17 @@ python Inference-sample-100.py --checkpoint ./checkpoints/openvla-lora-epoch-01-
 ```
 python Evaluate.py --json ./outputs/inference_results-openvla-lora-epoch-0301-000000-sample-100-rows.json
 ```
+
+## Reference
+
+```
+@misc{shin2026enhancinglinguisticgeneralizationvla,
+      title={Enhancing Linguistic Generalization of VLA: Fine-Tuning OpenVLA via Synthetic Instruction Augmentation}, 
+      author={Dongik Shin},
+      year={2026},
+      eprint={2603.16044},
+      archivePrefix={arXiv},
+      primaryClass={cs.AI},
+      url={https://arxiv.org/abs/2603.16044}, 
+}
+```
